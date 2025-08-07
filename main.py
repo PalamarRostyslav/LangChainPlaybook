@@ -1,10 +1,16 @@
 import os
 import glob
-from dotenv import load_dotenv
 import gradio as gr
+import plotly.graph_objects as go
+import html
+import numpy as np
 
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain.text_splitter import CharacterTextSplitter
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_chroma import Chroma
+from sklearn.manifold import TSNE
+from dotenv import load_dotenv
 
 MODEL = "gpt-4o-mini"
 db_name = "vector_db"
@@ -31,7 +37,70 @@ chunks = text_splitter.split_documents(documents)
 doc_types = set(chunk.metadata['doc_type'] for chunk in chunks)
 print(f"Document types found: {', '.join(doc_types)}")
 
-for chunk in chunks:
-    if 'CEO' in chunk.page_content:
-        print(chunk)
-        print("_________")
+embeddings = OpenAIEmbeddings()
+
+if os.path.exists(db_name):
+    Chroma(persist_directory=db_name, embedding_function=embeddings).delete_collection()
+
+vectorstore = Chroma.from_documents(documents=chunks, embedding=embeddings, persist_directory=db_name)
+print(f"Vectorstore created with {vectorstore._collection.count()} documents")
+
+collection = vectorstore._collection
+sample_embedding = collection.get(limit=1, include=["embeddings"])["embeddings"][0]
+dimensions = len(sample_embedding)
+print(f"The vectors have {dimensions:,} dimensions")
+
+result = collection.get(include=["embeddings", "documents", "metadatas"])
+vectors = np.array(result["embeddings"])
+documents = result["documents"]
+doc_types = [metadata["doc_type"] for metadata in result["metadatas"]]
+colors = [['blue', 'green', 'red', 'orange'][['products', 'employees', 'contracts', 'company'].index(t)] for t in doc_types]
+
+tsne = TSNE(n_components=2, random_state=42)
+reduced_vectors = tsne.fit_transform(vectors)
+
+# The 2D scatter plot
+fig = go.Figure(data=[go.Scatter(
+    x=reduced_vectors[:, 0],
+    y=reduced_vectors[:, 1],
+    mode='markers',
+    marker=dict(size=5, color=colors, opacity=0.8),
+    text=[f"Type: {t}<br>Text: {html.escape(d[:100])}..." for t, d in zip(doc_types, documents)],
+    hoverinfo='text'
+)])
+
+fig.update_layout(
+    title='2D Chroma Vector Store Visualization',
+    xaxis_title='x',
+    yaxis_title='y',
+    width=800,
+    height=600,
+    margin=dict(r=20, b=10, l=10, t=40)
+)
+
+fig.write_html("2Dplot.html")
+
+
+tsne = TSNE(n_components=3, random_state=42)
+reduced_vectors = tsne.fit_transform(vectors)
+
+# The 3D scatter plot
+fig = go.Figure(data=[go.Scatter3d(
+    x=reduced_vectors[:, 0],
+    y=reduced_vectors[:, 1],
+    z=reduced_vectors[:, 2],
+    mode='markers',
+    marker=dict(size=5, color=colors, opacity=0.8),
+    text=[f"Type: {t}<br>Text: {d[:100]}..." for t, d in zip(doc_types, documents)],
+    hoverinfo='text'
+)])
+
+fig.update_layout(
+    title='3D Chroma Vector Store Visualization',
+    scene=dict(xaxis_title='x', yaxis_title='y', zaxis_title='z'),
+    width=900,
+    height=700,
+    margin=dict(r=20, b=10, l=10, t=40)
+)
+
+fig.write_html("3Dplot.html")
